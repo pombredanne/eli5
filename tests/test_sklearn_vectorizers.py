@@ -5,26 +5,28 @@ from pprint import pprint
 import attr
 import pytest
 
-from eli5.sklearn import InvertableHashingVectorizer
 from sklearn.base import BaseEstimator
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import CountVectorizer, HashingVectorizer
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import FeatureUnion
 
-from eli5 import explain_prediction
-from .utils import format_as_all, get_all_features, get_names_coefs
+from eli5 import explain_prediction, explain_weights
+from eli5.formatters import format_as_html
+from eli5.sklearn import invert_hashing_and_fit, InvertableHashingVectorizer
+from .utils import format_as_all, get_all_features, get_names_coefs, write_html
 
 
-def check_explain_linear_binary(res, clf):
+def check_explain_linear_binary(res, clf, target='alt.atheism'):
     expl_text, expl_html = format_as_all(res, clf)
     assert len(res.targets) == 1
     e = res.targets[0]
-    assert e.target == 'comp.graphics'
-    neg = get_all_features(e.feature_weights.neg)
-    assert 'objective' in neg
+    assert e.target == target
+    pos = get_all_features(e.feature_weights.pos)
+    assert 'objective' in pos
     for expl in [expl_text, expl_html]:
-        assert 'comp.graphics' in expl
+        assert target in expl
         assert 'objective' in expl
 
 
@@ -48,9 +50,9 @@ def test_explain_linear_binary(vec, newsgroups_train_binary):
         top=20, vectorized=True)
     if isinstance(vec, HashingVectorizer):
         # InvertableHashingVectorizer must be passed with vectorized=True
-        neg_weights = res_vectorized.targets[0].feature_weights.neg
-        neg_vectorized = get_all_features(neg_weights)
-        assert all(name.startswith('x') for name in neg_vectorized)
+        pos_weights = res_vectorized.targets[0].feature_weights.pos
+        pos_vectorized = get_all_features(pos_weights)
+        assert all(name.startswith('x') for name in pos_vectorized)
     else:
         assert res_vectorized == _without_weighted_spans(res)
 
@@ -159,3 +161,89 @@ def test_explain_regression_hashing_vectorizer(newsgroups_train_binary):
         for (name, coef), (count_name, count_coef) in zip(values, count_values):
             assert name == count_name
             assert abs(coef - count_coef) < 0.05
+
+
+@pytest.mark.parametrize(['vec_cls'], [
+    [CountVectorizer],
+    [HashingVectorizer],
+])
+def test_explain_feature_union(vec_cls):
+    data = [
+        {'url': 'http://a.com/blog',
+         'text': 'security research'},
+        {'url': 'http://a.com',
+         'text': 'security research'},
+        {'url': 'http://b.com/blog',
+         'text': 'health study'},
+        {'url': 'http://b.com',
+         'text': 'health research'},
+        {'url': 'http://c.com/blog',
+         'text': 'security'},
+        ]
+    ys = [1, 0, 0, 0, 1]
+    url_vec = vec_cls(
+        preprocessor=lambda x: x['url'], analyzer='char', ngram_range=(3, 3))
+    text_vec = vec_cls(preprocessor=lambda x: x['text'])
+    vec = FeatureUnion([('url', url_vec), ('text', text_vec)])
+    xs = vec.fit_transform(data)
+    clf = LogisticRegression(random_state=42)
+    clf.fit(xs, ys)
+
+    ivec = invert_hashing_and_fit(vec, data)
+    weights_res = explain_weights(clf, ivec)
+    html_expl = format_as_html(weights_res)
+    write_html(clf, html_expl, '', postfix='{}_weights'.format(vec_cls.__name__))
+    assert 'text__security' in html_expl
+    assert 'url__log' in html_expl
+    assert 'BIAS' in html_expl
+
+    pred_res = explain_prediction(clf, data[0], vec)
+    html_expl = format_as_html(pred_res, force_weights=False)
+    write_html(clf, html_expl, '', postfix=vec_cls.__name__)
+    assert 'text: Highlighted in text (sum)' in html_expl
+    assert 'url: Highlighted in text (sum)' in html_expl
+    assert '<b>url:</b> <span' in html_expl
+    assert '<b>text:</b> <span' in html_expl
+    assert 'BIAS' in html_expl
+
+
+@pytest.mark.parametrize(['vec_cls'], [
+    [CountVectorizer],
+    [HashingVectorizer],
+])
+def test_explain_feature_union_with_nontext(vec_cls):
+    data = [
+        {'score': 1,
+         'text': 'security research'},
+        {'score': 0.1,
+         'text': 'security research'},
+        {'score': 0.5,
+         'text': 'health study'},
+        {'score': 0.5,
+         'text': 'health research'},
+        {'score': 0.1,
+         'text': 'security'},
+    ]
+    ys = [1, 0, 0, 0, 1]
+    score_vec = DictVectorizer()
+    text_vec = vec_cls(preprocessor=lambda x: x['text'])
+    vec = FeatureUnion([('score', score_vec), ('text', text_vec)])
+    xs = vec.fit_transform(data)
+    clf = LogisticRegression(random_state=42)
+    clf.fit(xs, ys)
+
+    ivec = invert_hashing_and_fit(vec, data)
+    weights_res = explain_weights(clf, ivec)
+    html_expl = format_as_html(weights_res)
+    write_html(clf, html_expl, '', postfix='{}_weights'.format(vec_cls.__name__))
+    assert 'score__score' in html_expl
+    assert 'text__security' in html_expl
+    assert 'BIAS' in html_expl
+
+    res = explain_prediction(clf, data[0], vec)
+    html_expl = format_as_html(res, force_weights=False)
+    write_html(clf, html_expl, '', postfix=vec_cls.__name__)
+    assert 'text: Highlighted in text (sum)' in html_expl
+    assert '<b>text:</b> <span' in html_expl
+    assert 'BIAS' in html_expl
+    assert 'score__score' in html_expl

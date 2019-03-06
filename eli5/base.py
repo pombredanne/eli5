@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import Dict, List, Tuple, Union
+from typing import Any, List, Tuple, Union, Optional
 
 from .base_utils import attrs
 from .formatters.features import FormattedFeatureName
@@ -16,16 +16,17 @@ class Explanation(object):
     """
     def __init__(self,
                  estimator,  # type: str
-                 description=None,  # type: str
-                 error=None,  # type: str
-                 method=None,  # type: str
+                 description=None,  # type: Optional[str]
+                 error=None,  # type: Optional[str]
+                 method=None,  # type: Optional[str]
                  is_regression=False,  # type: bool
-                 targets=None,  # type: List[TargetExplanation]
-                 feature_importances=None,  # type: List[FeatureWeight]
-                 decision_tree=None,  # type: TreeInfo
-                 highlight_spaces=None,
-                 transition_features=None,  # type: TransitionFeatureWeights
+                 targets=None,  # type: Optional[List[TargetExplanation]]
+                 feature_importances=None,  # type: Optional[FeatureImportances]
+                 decision_tree=None,  # type: Optional[TreeInfo]
+                 highlight_spaces=None,  # type: Optional[bool]
+                 transition_features=None,  # type: Optional[TransitionFeatureWeights]
                  ):
+        # type: (...) -> None
         self.estimator = estimator
         self.description = description
         self.error = error
@@ -46,6 +47,22 @@ class Explanation(object):
 
 
 @attrs
+class FeatureImportances(object):
+    """ Feature importances with number of remaining non-zero features.
+    """
+    def __init__(self, importances, remaining):
+        # type: (...) -> None
+        self.importances = importances  # type: List[FeatureWeight]
+        self.remaining = remaining  # type: int
+
+    @classmethod
+    def from_names_values(cls, names, values, std=None, **kwargs):
+        params = zip(names, values) if std is None else zip(names, values, std)
+        importances = [FeatureWeight(*x) for x in params]  # type: ignore
+        return cls(importances, **kwargs)
+
+
+@attrs
 class TargetExplanation(object):
     """ Explanation for a single target or class.
     Feature weights are stored in the :feature_weights: attribute,
@@ -56,8 +73,9 @@ class TargetExplanation(object):
                  feature_weights,  # type: FeatureWeights
                  proba=None,  # type: float
                  score=None,  # type: float
-                 weighted_spans=None,  # type: WeightedSpans
+                 weighted_spans=None,  # type: Optional[WeightedSpans]
                  ):
+        # type: (...) -> None
         self.target = target
         self.feature_weights = feature_weights
         self.proba = proba
@@ -82,6 +100,7 @@ class FeatureWeights(object):
                  pos_remaining=0,  # type: int
                  neg_remaining=0,  # type: int
                  ):
+        # type: (...) -> None
         self.pos = pos
         self.neg = neg
         self.pos_remaining = pos_remaining
@@ -94,10 +113,27 @@ class FeatureWeight(object):
                  feature,  # type: Feature
                  weight,  # type: float
                  std=None,  # type: float
+                 value=None,  # type: Any
                  ):
+        # type: (...) -> None
         self.feature = feature
         self.weight = weight
         self.std = std
+        self.value = value
+
+
+@attrs
+class WeightedSpans(object):
+    """ Holds highlighted spans for parts of document - a DocWeightedSpans
+    object for each vectorizer, and other features not highlighted anywhere.
+    """
+    def __init__(self,
+                 docs_weighted_spans,  # type: List[DocWeightedSpans]
+                 other=None,  # type: FeatureWeights
+                 ):
+        # type: (...) -> None
+        self.docs_weighted_spans = docs_weighted_spans
+        self.other = other
 
 
 WeightedSpan = Tuple[
@@ -108,32 +144,35 @@ WeightedSpan = Tuple[
 
 
 @attrs
-class WeightedSpans(object):
-    """ Features highlighted in text. :analyzer: is a type of the analyzer
-    (for example "char" or "word"), and :document: is a pre-processed document
-    before applying the analyzed. :weighted_spans: holds a list of spans
-    (see above) for features found in text (span indices correspond to
-    :document:), and :other: holds weights for features not highlighted in text.
+class DocWeightedSpans(object):
+    """ Features highlighted in text. :document: is a pre-processed document
+    before applying the analyzer. :weighted_spans: holds a list of spans
+    for features found in text (span indices correspond to
+    :document:). :preserve_density: determines how features are colored
+    when doing formatting - it is better set to True for char features
+    and to False for word features.
     """
     def __init__(self,
-                 analyzer,  # type: str
                  document,  # type: str
-                 weighted_spans,  # type: List[WeightedSpan]
-                 other=None,  # type: FeatureWeights
+                 spans,  # type: List[WeightedSpan]
+                 preserve_density=None,  # type: bool
+                 vec_name=None,  # type: str
                  ):
-        self.analyzer = analyzer
+        # type: (...) -> None
         self.document = document
-        self.weighted_spans = weighted_spans
-        self.other = other
+        self.spans = spans
+        self.preserve_density = preserve_density
+        self.vec_name = vec_name
 
 
 @attrs
 class TransitionFeatureWeights(object):
     """ Weights matrix for transition features. """
     def __init__(self,
-                 class_names,  # type: List[str],
+                 class_names,  # type: List[str]
                  coef,
                  ):
+        # type: (...) -> None
         self.class_names = class_names
         self.coef = coef
 
@@ -148,10 +187,13 @@ class TreeInfo(object):
                  criterion,  # type: str
                  tree,  # type: NodeInfo
                  graphviz,  # type: str
+                 is_classification, # type: bool
                  ):
+        # type: (...) -> None
         self.criterion = criterion
         self.tree = tree
         self.graphviz = graphviz
+        self.is_classification = is_classification
 
 
 @attrs
@@ -160,19 +202,20 @@ class NodeInfo(object):
     Pointers to left and right children are in :left: and :right: attributes.
     """
     def __init__(self,
-                 id,
-                 is_leaf,  # type: bool
+                 id,                 # type: int
+                 is_leaf,            # type: bool
                  value,
                  value_ratio,
-                 impurity,
-                 samples,
-                 sample_ratio,
-                 feature_name=None,
-                 feature_id=None,
-                 threshold=None,
-                 left=None,  # type: NodeInfo
-                 right=None,  # type: NodeInfo
+                 impurity,           # type: float
+                 samples,            # type: int
+                 sample_ratio,       # type: float
+                 feature_name=None,  # type: str
+                 feature_id=None,    # type: int
+                 threshold=None,     # type: float
+                 left=None,          # type: NodeInfo
+                 right=None,         # type: NodeInfo
                  ):
+        # type: (...) -> None
         self.id = id
         self.is_leaf = is_leaf
         self.value = value

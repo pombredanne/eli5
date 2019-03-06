@@ -1,7 +1,7 @@
 import six
 
-import attr
-import numpy as np
+import attr   # type: ignore
+import numpy as np   # type: ignore
 
 from .features import FormattedFeatureName
 
@@ -29,10 +29,10 @@ def _numpy_to_python(obj):
     elif isinstance(obj, _numpy_string_types):
         return six.text_type(obj)
     elif hasattr(obj, 'dtype') and np.isscalar(obj):
-        if np.issubdtype(obj, float):
+        if np.issubdtype(obj, np.floating):
             return float(obj)
-        elif np.issubdtype(obj, int):
+        elif np.issubdtype(obj, np.integer):
             return int(obj)
-        elif np.issubdtype(obj, bool):
+        elif np.issubdtype(obj, np.bool_):
             return bool(obj)
     return obj

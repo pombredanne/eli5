@@ -7,10 +7,18 @@ from pprint import pprint
 
 from hypothesis.strategies import integers
 from hypothesis.extra.numpy import arrays
+import numpy as np
 
+from eli5.base import Explanation
 from eli5.formatters import format_as_text, format_as_html, format_as_dict
 from eli5.formatters.html import html_escape
 from eli5.formatters.text import format_signed
+from eli5.sklearn.utils import sklearn_version
+
+
+SGD_KWARGS = {'random_state': 42}
+if sklearn_version() >= '0.19':
+    SGD_KWARGS['tol'] = 1e-3
 
 
 def rnd_len_arrays(dtype, min_len=0, max_len=3, elements=None):
@@ -29,7 +37,7 @@ def format_as_all(res, clf, **kwargs):
     expl_text = format_as_text(res, **kwargs)
     expl_html = format_as_html(res, **kwargs)
     print(expl_text)
-    write_html(clf, expl_html, expl_text)
+    write_html(clf, expl_html, expl_text, caller_depth=2)
     return expl_text, expl_html
 
 
@@ -39,12 +47,12 @@ def strip_blanks(html):
     return html.replace(' ', '').replace('\n', '')
 
 
-def write_html(clf, html, text, postfix=''):
+def write_html(clf, html, text, postfix='', caller_depth=1):
     """ Write to html file in .html directory. Filename is generated from calling
     function name and module, and clf class name.
     This is useful to check and debug format_as_html function.
     """
-    caller = inspect.stack()[2]
+    caller = inspect.stack()[caller_depth]
     try:
         test_name, test_file = caller.function, caller.filename
     except AttributeError:
@@ -80,3 +88,34 @@ def get_names_coefs(feature_weights):
              else fw.feature,
              fw.weight)
             for fw in feature_weights]
+
+
+def check_targets_scores(explanation, atol=1e-8):
+    # type: (Explanation, float) -> None
+    """ Check that feature weights sum to target score or proba,
+    if both proba and score are present they match,
+    and that there are no "remaining" features.
+    """
+    targets = explanation.targets
+    for target in targets:
+        weights = target.feature_weights
+        # else the check is invalid
+        assert weights.neg_remaining == weights.pos_remaining == 0
+        weights_sum = (sum(fw.weight for fw in weights.pos) +
+                       sum(fw.weight for fw in weights.neg))
+        expected = target.score if target.score is not None else target.proba
+        assert np.isclose(abs(expected), abs(weights_sum), atol=atol), \
+            (expected, weights_sum)
+    if any(t.score is not None for t in targets):
+        if len(targets) == 1 and targets[0].proba is not None:
+            target = targets[0]
+            # one target with proba => assume sigmoid
+            proba = 1. / (1 + np.exp(-target.score))
+            assert np.isclose(target.proba, proba, atol=atol) or \
+                   np.isclose(target.proba, 1-proba, atol=atol)
+        elif any(t.proba is not None for t in targets):
+            # many targets with proba => assume softmax
+            norm = np.sum(np.exp([t.score for t in targets]))
+            for target in targets:
+                assert np.isclose(np.exp(target.score) / norm, target.proba,
+                                  atol=atol)

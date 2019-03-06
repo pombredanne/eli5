@@ -6,11 +6,11 @@ Welcome to ELI5's documentation!
    :alt: PyPI Version
 
 .. image:: https://travis-ci.org/TeamHG-Memex/eli5.svg?branch=master
-   :target: http://travis-ci.org/TeamHG-Memex/eli5
+   :target: https://travis-ci.org/TeamHG-Memex/eli5
    :alt: Build Status
 
-.. image:: http://codecov.io/github/TeamHG-Memex/eli5/coverage.svg?branch=master
-   :target: http://codecov.io/github/TeamHG-Memex/eli5?branch=master
+.. image:: https://codecov.io/github/TeamHG-Memex/eli5/coverage.svg?branch=master
+   :target: https://codecov.io/github/TeamHG-Memex/eli5?branch=master
    :alt: Code Coverage
 
 ELI5_ is a Python library which allows to visualize and debug
@@ -23,7 +23,8 @@ explain black-box models.
 
    overview
    tutorials/index
-   lime
+   libraries/index
+   blackbox/index
    autodocs/index
    contribute
    changes

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import
 
-import numpy as np
-from scipy import sparse as sp
-from sklearn_crfsuite import CRF
+import numpy as np  # type: ignore
+from scipy import sparse as sp  # type: ignore
+from sklearn_crfsuite import CRF  # type: ignore
 
 from eli5.base import Explanation, TargetExplanation, TransitionFeatureWeights
 from eli5.explain import explain_weights
-from eli5.utils import get_display_names
+from eli5.utils import get_target_display_names
 from eli5._feature_names import FeatureNames
 from eli5._feature_weights import get_top_features
 
@@ -17,15 +17,21 @@ def explain_weights_sklearn_crfsuite(crf,
                                      top=20,
                                      target_names=None,
                                      targets=None,
-                                     feature_re=None):
-    """ Explain sklearn_crfsuite.CRF weights """
+                                     feature_re=None,
+                                     feature_filter=None):
+    """ Explain sklearn_crfsuite.CRF weights.
+
+    See :func:`eli5.explain_weights` for description of
+    ``top``, ``target_names``, ``targets``,
+    ``feature_re`` and ``feature_filter`` parameters.
+    """
     feature_names = np.array(crf.attributes_)
     state_coef = crf_state_coef(crf).todense().A
     transition_coef = crf_transition_coef(crf)
 
-    if feature_re:
+    if feature_filter is not None or feature_re is not None:
         state_feature_names, flt_indices = (
-            FeatureNames(feature_names).filtered_by_re(feature_re))
+            FeatureNames(feature_names).handle_filter(feature_filter, feature_re))
         state_feature_names = np.array(state_feature_names.feature_names)
         state_coef = state_coef[:, flt_indices]
     else:
@@ -37,7 +43,8 @@ def explain_weights_sklearn_crfsuite(crf,
     if targets is None:
         targets = sorted_for_ner(crf.classes_)
 
-    display_names = get_display_names(crf.classes_, target_names, targets)
+    display_names = get_target_display_names(crf.classes_, target_names,
+                                             targets)
     indices, names = zip(*display_names)
     transition_coef = filter_transition_coefs(transition_coef, indices)
 
@@ -91,14 +98,14 @@ def filter_transition_coefs(transition_coef, indices):
     array([[0]])
     >>> filter_transition_coefs(coef, [1, 2])
     array([[4, 5],
-    ...    [7, 8]])
+           [7, 8]])
     >>> filter_transition_coefs(coef, [2, 0])
     array([[8, 6],
-    ...    [2, 0]])
+           [2, 0]])
     >>> filter_transition_coefs(coef, [0, 1, 2])
     array([[0, 1, 2],
-    ...    [3, 4, 5],
-    ...    [6, 7, 8]])
+           [3, 4, 5],
+           [6, 7, 8]])
     """
     indices = np.array(indices)
     rows = transition_coef[indices]

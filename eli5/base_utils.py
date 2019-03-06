@@ -1,7 +1,11 @@
 import inspect
 
-import attr
+import attr  # type: ignore
 
+try:
+    from functools import singledispatch  # type: ignore
+except ImportError:
+    from singledispatch import singledispatch  # type: ignore
 
 
 def attrs(class_):
@@ -13,10 +17,14 @@ def attrs(class_):
     do not want to repeat attribute definitions in the class body.
     """
     attrs_kwargs = {}
-    for method in ['repr', 'cmp', 'hash']:
-        if '__{}__'.format(method) in class_.__dict__:
+    for method, kw_name in [
+            ('__repr__', 'repr'),
+            ('__eq__', 'cmp'),
+            ('__hash__', 'hash'),
+            ]:
+        if method in class_.__dict__:
             # Allow to redefine a special method (or else attr.s will do it)
-            attrs_kwargs[method] = False
+            attrs_kwargs[kw_name] = False
     init_args = inspect.getargspec(class_.__init__)
     defaults_shift = len(init_args.args) - len(init_args.defaults or []) - 1
     these = {}
@@ -25,4 +33,4 @@ def attrs(class_):
         if idx >= defaults_shift:
             attrib_kwargs['default'] = init_args.defaults[idx - defaults_shift]
         these[arg] = attr.ib(**attrib_kwargs)
-    return attr.s(class_, these=these, init=False, slots=True, **attrs_kwargs)
+    return attr.s(class_, these=these, init=False, slots=True, **attrs_kwargs)  # type: ignore

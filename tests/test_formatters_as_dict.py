@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 
 from eli5.base import (
@@ -9,13 +11,17 @@ from eli5.formatters.as_dict import format_as_dict, _numpy_to_python
 
 
 def test_numpy_to_python():
-    assert _numpy_to_python({
+    x = _numpy_to_python({
         'x': np.int32(12),
         'y': [np.ones(2)],
-    }) == {
+        'z': {'inner': np.bool_(False)},
+    })
+    assert x == {
         'x': 12,
         'y': [[1.0, 1.0]],
+        'z': {'inner': False},
     }
+    json.dumps(x)
 
 
 def test_format_as_dict():
@@ -31,7 +37,11 @@ def test_format_as_dict():
            'targets': [
                {'target': 'y',
                 'feature_weights': {
-                    'pos': [{'feature': 'a', 'weight': 13.0, 'std': None}],
+                    'pos': [{
+                        'feature': 'a',
+                        'weight': 13.0,
+                        'std': None,
+                        'value': None}],
                     'pos_remaining': 0,
                     'neg': [],
                     'neg_remaining': 0,

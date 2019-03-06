@@ -7,8 +7,10 @@ from sklearn.datasets import make_classification, make_regression
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.linear_model import LogisticRegression, ElasticNet, SGDRegressor
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import SGDClassifier
 from sklearn.naive_bayes import GaussianNB, BernoulliNB
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.multiclass import OneVsRestClassifier
 
 from eli5._feature_names import FeatureNames
 from eli5.sklearn.utils import (
@@ -19,18 +21,21 @@ from eli5.sklearn.utils import (
     is_multitarget_regressor,
     get_num_features,
 )
+from .utils import SGD_KWARGS
 
 
-def test_has_intercept(newsgroups_train):
+@pytest.mark.parametrize(['clf', 'intercept'], [
+    [SGDClassifier(**SGD_KWARGS), True],
+    [SGDClassifier(fit_intercept=False, **SGD_KWARGS), False],
+    [OneVsRestClassifier(SGDClassifier(**SGD_KWARGS)), True],
+    [OneVsRestClassifier(
+        SGDClassifier(fit_intercept=False, **SGD_KWARGS)), False],
+])
+def test_has_intercept(newsgroups_train, clf, intercept):
     vec = TfidfVectorizer()
     X = vec.fit_transform(newsgroups_train[0])
-    clf = LogisticRegression()
     clf.fit(X, newsgroups_train[1])
-    assert has_intercept(clf)
-
-    clf2 = LogisticRegression(fit_intercept=False)
-    clf2.fit(X, newsgroups_train[1])
-    assert not has_intercept(clf2)
+    assert has_intercept(clf) == intercept
 
 
 def test_is_multiclass():
@@ -100,14 +105,14 @@ def test_get_feature_names():
 
 
 def test_get_feature_names_1dim_coef():
-    clf = SGDRegressor(fit_intercept=False)
+    clf = SGDRegressor(fit_intercept=False, **SGD_KWARGS)
     X, y = make_regression(n_targets=1, n_features=3)
     clf.fit(X, y)
     assert set(get_feature_names(clf)) == {'x0', 'x1', 'x2'}
 
 
 def test_get_default_target_names():
-    clf = SGDRegressor()
+    clf = SGDRegressor(**SGD_KWARGS)
     X, y = make_regression(n_targets=1, n_features=3)
     clf.fit(X, y)
     assert set(get_default_target_names(clf)) == {'y'}
@@ -123,6 +128,8 @@ def test_get_default_target_names():
     [RandomForestClassifier()],
     [GaussianNB()],
     [DecisionTreeClassifier()],
+    [OneVsRestClassifier(DecisionTreeClassifier())],
+    [OneVsRestClassifier(LogisticRegression())],
     [BernoulliNB()],
 ])
 def test_get_num_features(clf):

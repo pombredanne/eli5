@@ -12,4 +12,10 @@ from .explain_prediction import (
     explain_prediction_linear_classifier,
     explain_prediction_linear_regressor,
 )
-from .unhashing import InvertableHashingVectorizer, FeatureUnhasher
+from .unhashing import (
+    InvertableHashingVectorizer,
+    FeatureUnhasher,
+    invert_hashing_and_fit,
+)
+from .permutation_importance import PermutationImportance
+from . import transform as _

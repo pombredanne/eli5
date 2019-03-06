@@ -1,72 +1,167 @@
-import re
-from typing import Set, Tuple
+from __future__ import absolute_import
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from six.moves import xrange
-from sklearn.feature_extraction.text import VectorizerMixin
+from sklearn.feature_extraction.text import VectorizerMixin  # type: ignore
+from sklearn.pipeline import FeatureUnion  # type: ignore
 
-from eli5.base import WeightedSpans, FeatureWeights, FeatureWeight
-from eli5.sklearn.unhashing import InvertableHashingVectorizer
+from eli5.base import (
+    DocWeightedSpans, WeightedSpans, FeatureWeights, FeatureWeight,
+    TargetExplanation)
 from eli5.formatters import FormattedFeatureName
+from eli5.sklearn.unhashing import InvertableHashingVectorizer
+from eli5.sklearn._span_analyzers import build_span_analyzer
 
 
 def get_weighted_spans(doc, vec, feature_weights):
+    # type: (Any, Any, FeatureWeights) -> Optional[WeightedSpans]
     """ If possible, return a dict with preprocessed document and a list
     of spans with weights, corresponding to features in the document.
     """
+    if isinstance(vec, FeatureUnion):
+        return _get_weighted_spans_from_union(doc, vec, feature_weights)
+    else:
+        result = _get_doc_weighted_spans(doc, vec, feature_weights)
+        if result is not None:
+            found_features, doc_weighted_spans = result
+            return WeightedSpans(
+                [doc_weighted_spans],
+                other=_get_other(feature_weights, [('', found_features)]),
+            )
+    return None
+
+
+def add_weighted_spans(doc, vec, vectorized, target_expl):
+    # type: (Any, Any, bool, TargetExplanation) -> None
+    """
+    Compute and set ``target_expl.weighted_spans`` attribute, when possible.
+    """
+    if vec is None or vectorized:
+        return
+
+    weighted_spans = get_weighted_spans(doc, vec, target_expl.feature_weights)
+    if weighted_spans:
+        target_expl.weighted_spans = weighted_spans
+
+
+FoundFeatures = Dict[Tuple[str, int], float]
+
+
+def _get_doc_weighted_spans(doc,
+                            vec,
+                            feature_weights,  # type: FeatureWeights
+                            feature_fn=None   # type: Optional[Callable[[str], str]]
+                            ):
+    # type: (...) -> Optional[Tuple[FoundFeatures, DocWeightedSpans]]
     if isinstance(vec, InvertableHashingVectorizer):
         vec = vec.vec
+
+    if hasattr(vec, 'get_doc_weighted_spans'):
+        return vec.get_doc_weighted_spans(doc, feature_weights, feature_fn)
+
     if not isinstance(vec, VectorizerMixin):
-        return
+        return None
 
-    def _get_features(feature):
-        if isinstance(feature, list):
-            return [f['name'] for f in feature]
-        else:
-            return [feature]
-
-    # (group, idx) is a feature key here
-    feature_weights_dict = {
-        f: (fw.weight, (group, idx)) for group in ['pos', 'neg']
-        for idx, fw in enumerate(getattr(feature_weights, group))
-        for f in _get_features(fw.feature)}
-
-    span_analyzer, preprocessed_doc = _build_span_analyzer(doc, vec)
+    span_analyzer, preprocessed_doc = build_span_analyzer(doc, vec)
     if span_analyzer is None:
-        return
+        return None
 
-    weighted_spans = []
+    feature_weights_dict = _get_feature_weights_dict(feature_weights,
+                                                     feature_fn)
+    spans = []
     found_features = {}
-    for spans, feature in span_analyzer(preprocessed_doc):
-        try:
-            weight, key = feature_weights_dict[feature]
-        except KeyError:
-            pass
-        else:
-            weighted_spans.append((feature, spans, weight))
-            found_features[key] = weight
+    for f_spans, feature in span_analyzer(preprocessed_doc):
+        if feature not in feature_weights_dict:
+            continue
+        weight, key = feature_weights_dict[feature]
+        spans.append((feature, f_spans, weight))
+        # XXX: this assumes feature names are unique
+        found_features[key] = weight
 
-    return WeightedSpans(
-        analyzer=vec.analyzer,
+    return found_features, DocWeightedSpans(
         document=preprocessed_doc,
-        weighted_spans=weighted_spans,
-        other=_get_other(
-            feature_weights, feature_weights_dict, found_features),
+        spans=spans,
+        preserve_density=vec.analyzer.startswith('char'),
     )
 
 
-def _get_other(feature_weights, feature_weights_dict, found_features):
+def _get_feature_weights_dict(feature_weights,  # type: FeatureWeights
+                              feature_fn        # type: Optional[Callable[[str], str]]
+                              ):
+    # type: (...) -> Dict[str, Tuple[float, Tuple[str, int]]]
+    """ Return {feat_name: (weight, (group, idx))} mapping. """
+    return {
+        # (group, idx) is an unique feature identifier, e.g. ('pos', 2)
+        feat_name: (fw.weight, (group, idx))
+        for group in ['pos', 'neg']
+        for idx, fw in enumerate(getattr(feature_weights, group))
+        for feat_name in _get_features(fw.feature, feature_fn)
+    }
+
+
+def _get_features(feature, feature_fn=None):
+    if isinstance(feature, list):
+        features = [f['name'] for f in feature]
+    else:
+        features = [feature]
+    if feature_fn:
+        features = list(filter(None, map(feature_fn, features)))
+    return features
+
+
+def _get_weighted_spans_from_union(doc, vec_union, feature_weights):
+    # type: (Any, FeatureUnion, FeatureWeights) -> Optional[WeightedSpans]
+    docs_weighted_spans = []
+    named_found_features = []
+    for vec_name, vec in vec_union.transformer_list:
+        vec_prefix = '{}__'.format(vec_name)
+
+        def feature_fn(name):
+            if isinstance(name, FormattedFeatureName):
+                return
+            if not name.startswith(vec_prefix):
+                return  # drop feature
+            return name[len(vec_prefix):]  # remove prefix
+
+        result = _get_doc_weighted_spans(doc, vec, feature_weights, feature_fn)
+        if result:
+            found_features, doc_weighted_spans = result
+            doc_weighted_spans.vec_name = vec_name
+            named_found_features.append((vec_name, found_features))
+            docs_weighted_spans.append(doc_weighted_spans)
+
+    if docs_weighted_spans:
+        return WeightedSpans(
+            docs_weighted_spans,
+            other=_get_other(feature_weights, named_found_features),
+        )
+    else:
+        return None
+
+
+def _get_other(feature_weights, named_found_features):
+    # type: (FeatureWeights, List[Tuple[str, FoundFeatures]]) -> FeatureWeights
     # search for items that were not accounted at all.
-    other_items = []
+    other_items = []  # type: List[FeatureWeight]
     accounted_keys = set()  # type: Set[Tuple[str, int]]
-    for feature, (_, key) in feature_weights_dict.items():
-        if key not in found_features and key not in accounted_keys:
-            group, idx = key
-            other_items.append(getattr(feature_weights, group)[idx])
-            accounted_keys.add(key)
-    if found_features:
-        other_items.append(FeatureWeight(
-            FormattedFeatureName('Highlighted in text (sum)'),
-            sum(found_features.values())))
+    all_found_features = set()  # type: Set[Tuple[str, int]]
+    for _, found_features in named_found_features:
+        all_found_features.update(found_features)
+
+    for group in ['pos', 'neg']:
+        for idx, fw in enumerate(getattr(feature_weights, group)):
+            key = (group, idx)
+            if key not in all_found_features and key not in accounted_keys:
+                other_items.append(fw)
+                accounted_keys.add(key)
+
+    for vec_name, found_features in named_found_features:
+        if found_features:
+            other_items.append(FeatureWeight(
+                feature=FormattedFeatureName(
+                    '{}Highlighted in text (sum)'.format(
+                        '{}: '.format(vec_name) if vec_name else '')),
+                weight=sum(found_features.values())))
+
     other_items.sort(key=lambda x: abs(x.weight), reverse=True)
     return FeatureWeights(
         pos=[fw for fw in other_items if fw.weight >= 0],
@@ -74,95 +169,3 @@ def _get_other(feature_weights, feature_weights_dict, found_features):
         pos_remaining=feature_weights.pos_remaining,
         neg_remaining=feature_weights.neg_remaining,
     )
-
-
-def _build_span_analyzer(document, vec):
-    """ Return an analyzer and the preprocessed doc.
-    Analyzer will yield pairs of spans and feature, where spans are pairs
-    of indices into the preprocessed doc. The idea here is to do minimal
-    preprocessing so that we can still recover the same features as sklearn
-    vectorizers, but with spans, that will allow us to highlight
-    features in preprocessed documents.
-    Analyzers are adapter from VectorizerMixin from sklearn.
-    """
-    preprocessed_doc = vec.build_preprocessor()(vec.decode(document))
-    analyzer = None
-    if vec.analyzer == 'word' and vec.tokenizer is None:
-        stop_words = vec.get_stop_words()
-        tokenize = _build_tokenizer(vec)
-        analyzer = lambda doc: _word_ngrams(vec, tokenize(doc), stop_words)
-    elif vec.analyzer == 'char':
-        preprocessed_doc = vec._white_spaces.sub(' ', preprocessed_doc)
-        analyzer = lambda doc: _char_ngrams(vec, doc)
-    elif vec.analyzer == 'char_wb':
-        preprocessed_doc = vec._white_spaces.sub(' ', preprocessed_doc)
-        analyzer = lambda doc: _char_wb_ngrams(vec, doc)
-    return analyzer, preprocessed_doc
-
-
-# Adapted from VectorizerMixin.build_tokenizer
-
-def _build_tokenizer(vec):
-    token_pattern = re.compile(vec.token_pattern)
-    tokenizer = lambda doc: [
-        (m.span(), m.group()) for m in re.finditer(token_pattern, doc)]
-    return tokenizer
-
-
-# Adapted from VectorizerMixin._word_ngrams
-
-def _word_ngrams(vec, tokens, stop_words=None):
-    if stop_words is not None:
-        tokens = [(s, w) for s, w in tokens if w not in stop_words]
-    min_n, max_n = vec.ngram_range
-    if max_n == 1:
-        tokens = [([s], w) for s, w in tokens]
-    else:
-        original_tokens = tokens
-        tokens = []
-        n_original_tokens = len(original_tokens)
-        for n in xrange(min_n,
-                        min(max_n + 1, n_original_tokens + 1)):
-            for i in xrange(n_original_tokens - n + 1):
-                ngram_tokens = original_tokens[i: i + n]
-                tokens.append((
-                    [s for s, _ in ngram_tokens],
-                    ' '.join(t for _, t in ngram_tokens)))
-    return tokens
-
-
-# Adapted from VectorizerMixin._char_wb_ngrams
-
-def _char_ngrams(vec, text_document):
-    text_len = len(text_document)
-    ngrams = []
-    min_n, max_n = vec.ngram_range
-    for n in xrange(min_n, min(max_n + 1, text_len + 1)):
-        for i in xrange(text_len - n + 1):
-            ngrams.append(([(i, i + n)], text_document[i: i + n]))
-    return ngrams
-
-
-# Adapted from VectorizerMixin._char_wb_ngrams
-
-def _char_wb_ngrams(vec, text_document):
-    min_n, max_n = vec.ngram_range
-    ngrams = []
-    for m in re.finditer(r'\S+', text_document):
-        w_start, w_end = m.start(), m.end()
-        w = m.group(0)
-        w = ' ' + w + ' '
-        w_len = len(w)
-        for n in xrange(min_n, max_n + 1):
-            offset = 0
-            ngrams.append((
-                [(w_start + offset - 1, w_start + offset + n - 1)],
-                w[offset:offset + n]))
-            while offset + n < w_len:
-                offset += 1
-                ngrams.append((
-                    [(w_start + offset - 1, w_start + offset + n - 1)],
-                    w[offset:offset + n]))
-            if offset == 0:   # count a short word (w_len < n) only once
-                break
-    return ngrams

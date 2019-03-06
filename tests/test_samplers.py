@@ -8,27 +8,28 @@ from hypothesis.strategies import integers, text
 
 from eli5.lime.samplers import (
     MaskingTextSampler,
+    MaskingTextSamplers,
     UnivariateKernelDensitySampler,
     MultivariateKernelDensitySampler
 )
 from sklearn.neighbors import KernelDensity
 
 
-@given(text(), integers(1, 3))
-def test_masking_text_sampler_length(text, n_samples):
-    for bow in [True, False]:
-        sampler = MaskingTextSampler(bow=bow)
-        sampler.fit([text])
+@pytest.mark.parametrize(["bow"], [[True], [False]])
+@given(text=text(), n_samples=integers(1, 3))
+def test_masking_text_sampler_length(text, n_samples, bow):
+    sampler = MaskingTextSampler(bow=bow)
+    sampler.fit([text])
 
-        samples, distances = sampler.sample_near(text, n_samples=n_samples)
-        assert len(samples) == n_samples
-        assert distances.shape == (n_samples,)
-        assert all(len(s) <= len(text) for s in samples)
+    samples, sims = sampler.sample_near(text, n_samples=n_samples)
+    assert len(samples) == n_samples
+    assert sims.shape == (n_samples,)
+    assert all(len(s) <= len(text) for s in samples)
 
 
 def test_masking_text_sampler_bow():
     sampler = MaskingTextSampler(bow=True)
-    samples, distances = sampler.sample_near('foo bar bar baz', n_samples=10000)
+    samples, sims = sampler.sample_near('foo bar bar baz', n_samples=10000)
     assert 'foo bar bar ' in samples
     assert ' bar bar ' in samples
     assert '  bar ' not in samples
@@ -39,13 +40,63 @@ def test_masking_text_sampler_bow():
     assert 'foo  bar baz' not in samples
 
 
+def test_masking_text_sampler_union():
+    sampler = MaskingTextSamplers([
+        dict(bow=False),
+        dict(bow=True),
+    ], random_state=42)
+    samples, sims = sampler.sample_near('foo bar bar baz', n_samples=10000)
+    assert 'foo bar bar baz' not in samples
+    assert 'foo bar bar ' in samples
+    assert ' bar bar ' in samples
+    assert '  bar ' in samples
+    assert ' bar bar baz' in samples
+    assert '   ' in samples
+    assert 'foo bar  baz' in samples
+    assert 'foo  bar baz' in samples
+
+
 def test_masking_text_sampler():
     sampler = MaskingTextSampler(bow=False)
-    samples, distances = sampler.sample_near('foo bar bar baz', n_samples=10000)
+    samples, sims = sampler.sample_near('foo bar bar baz', n_samples=10000)
     assert 'foo bar bar ' in samples
     assert 'foo  bar baz' in samples
     assert 'foo bar bar baz' not in samples
     assert '   ' in samples
+
+
+def test_masking_text_sampler_ratios():
+    sampler = MaskingTextSampler(min_replace=2)
+    samples, sims = sampler.sample_near('foo bar baz', n_samples=100)
+    assert {s.strip() for s in samples} == {'foo', 'bar', 'baz', ''}
+
+    sampler = MaskingTextSampler(max_replace=1)
+    samples, sims = sampler.sample_near('foo bar baz', n_samples=100)
+    assert {s.strip() for s in samples} == {'foo bar', 'foo  baz', 'bar baz'}
+
+    sampler = MaskingTextSampler(max_replace=0.3)  # should be 1
+    samples, sims = sampler.sample_near('foo bar baz', n_samples=100)
+    assert {s.strip() for s in samples} == {'foo bar', 'foo  baz', 'bar baz'}
+
+    sampler = MaskingTextSampler(min_replace=0.9)  # should be 2
+    samples, sims = sampler.sample_near('foo bar baz', n_samples=100)
+    assert {s.strip() for s in samples} == {'foo', 'bar', 'baz', ''}
+
+
+def test_masking_samplers_random_state():
+    params = [{'bow': True}, {'bow': False}]
+    s1 = MaskingTextSamplers(params, random_state=42)
+    s2 = MaskingTextSamplers(params, random_state=42)
+    s3 = MaskingTextSamplers(params, random_state=24)
+
+    doc = 'foo bar baz egg spam egg spam'
+
+    samples1, _ = s1.sample_near(doc, n_samples=50)
+    samples2, _ = s2.sample_near(doc, n_samples=50)
+    samples3, _ = s3.sample_near(doc, n_samples=50)
+
+    assert samples1 == samples2
+    assert samples1 != samples3
 
 
 def test_univariate_kde_sampler():
@@ -60,7 +111,7 @@ def test_univariate_kde_sampler():
     assert np.isclose(s.kdes_[1].bandwidth, 1e-6)
 
     # check sampling results
-    samples, distances = s.sample_near([0.1, 1], n_samples=1000)
+    samples, sims = s.sample_near([0.1, 1], n_samples=1000)
 
     feat1_sampled = samples[:, 0]
     feat2_sampled = samples[:, 1]
@@ -92,7 +143,7 @@ def test_multivariate_kde_sampler():
     assert 0.01 < s.kde_.bandwidth < 5
 
     # check sampling results
-    X_sampled, distances = s.sample_near(X[0], 1000)
+    X_sampled, sims = s.sample_near(X[0], 1000)
     feat1_sampled = X_sampled[:, 0]
     feat2_sampled = X_sampled[:, 1]
 

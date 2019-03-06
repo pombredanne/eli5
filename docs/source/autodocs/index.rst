@@ -12,4 +12,7 @@ API documentation is auto-generated.
    ./lime
    ./sklearn
    ./sklearn_crfsuite
+   ./xgboost
+   ./lightgbm
+   ./permutation_importance
    ./base
